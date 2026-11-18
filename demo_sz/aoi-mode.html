@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AOi 대화 모드 분리 프로토타입</title>
+<meta name="description" content="AOi 개선안 시안: DM 모드(기존, 기록이 남음)와 DEEP CHAT 모드(신규, 보낸 글은 4초 뒤 사라지고 캐릭터는 목소리로만 답함)를 나눈 프로토타입">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<script>if (window.self !== window.top) document.documentElement.classList.add('in-frame');</script>
+<!-- 2026-11-10 사용자 "aoi프로토타입 uiux 애니메이션 css 입혀줘 다이나믹 하게": 토글 알약 · 장면 전환 · 말풍선 · 입력 중 · 4초 글자 · 말하는 중 빛 · 보내기 · 안내 · 기록 패널 움직임, [움직임 끄기]
+     2026-11-10 사용자 "DEEP CHAT도 우측 히스토리 아이콘을 통해 대화이력을 볼 수 있게(히스토리 단어 대신 아이콘)": 기록 아이콘 · 대화 기록 패널 추가
+     2026-11-09 사용자 지시: "dm모드(as-is, 이력이 계속 남음), 채팅모드(입력 글 4초 잔존 후 사라짐 · 레이아웃 없이 문자만, 캐릭터는 음성으로만 답) 분리를 개선점으로 제작"
+     캐릭터는 사용자 제공 메이드 복 캐릭터 그림(img/chara_maid.webp, 2026-11-10 교체 — 그 전은 SVG 임시 그림). 실제 서비스는 Live2D 모델. 음성은 브라우저 음성 합성으로 흉내 낸다.
+     캡처용: ?shot=dm | chat | chat-sent | chat-speak | chat-mute | dm-back  (99.생성도구/tools/shots.mjs)
+     2026-11-09 사용자 "채팅 버전 프로토타입 구현 · 배경 레이어는 기존 팝업과 동일하게": 포트폴리오 시연 팝업(바이브코딩 시연 화면)에 넣고,
+       설명 레이어는 02 웹앱 기획 demo(sfc-office.html 등)의 튜토리얼(.tut: 어둡게 덮고 대상만 비추기 + 단계 말풍선)을 그대로 옮김.
+       바깥 배경은 팝업 무대와 같은 밝은 회색(#F2F4F6), 휴대전화는 화면 높이에 맞춰 줄임 -->
+<style>
+:root{
+  --bg:#0b0a10; --panel:#16141d; --line:#2c2936;
+  --ink:#ffffff; --sub:#cfcbd8; --mute:#a9a4b6;
+  --pink:#ff007a;          /* AOi 강조색: 큰 글자 · 테두리 · 장식에만 */
+  --pink-d:#c4005e;        /* 흰 글자를 올리는 면(대비 6.0:1) */
+  --bub-me:#2a2733; --dim:rgba(8,6,14,.58);
+  --font:"Pretendard","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;
+  --ease:cubic-bezier(.22,.8,.3,1);
+}
+*,*::before,*::after{ box-sizing:border-box; }
+html,body{ margin:0; height:100%; }
+body{ background:#f2f4f6; color:#191f28; font-family:var(--font); -webkit-font-smoothing:antialiased; word-break:keep-all; }
+button{ font:inherit; color:inherit; }
+:focus-visible{ outline:3px solid #3182f6; outline-offset:2px; }
+.phone :focus-visible{ outline-color:#ffd1e6; }
+.sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.ico{ width:24px; height:24px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+
+/* ── 바깥 배치: 넓은 화면 = 휴대전화 + 설명, 좁은 화면 = 휴대전화만(설명은 아래) ── */
+.wrap{ min-height:100%; display:flex; align-items:center; justify-content:center; gap:48px; padding:24px 16px; }
+.pbox{ position:relative; width:390px; height:844px; flex:none; }
+.phone{ position:absolute; left:0; top:0; width:390px; height:844px; border-radius:44px; overflow:hidden; background:#000; color:#fff; transform-origin:0 0;
+  box-shadow:0 0 0 10px #1d1b24, 0 0 0 11px #34313d, 0 30px 80px rgba(0,0,0,.6); isolation:isolate; }
+.phone, .stage{ overflow:clip; }   /* 2026-11-10 튜토리얼 쏠림 수정: 틀이 밀리지 않게(scrollIntoView · focus로도) */
+.aside{ width:400px; max-width:100%; }
+.aside h1{ margin:0; font-size:24px; line-height:1.35; letter-spacing:-.02em; }
+.aside .by{ margin:8px 0 0; color:#4e5968; font-size:14px; }
+.aside h2{ margin:20px 0 8px; font-size:16px; color:#333d4b; }
+.aside p,.aside li{ font-size:14px; line-height:1.6; color:#333d4b; }
+.aside ol{ margin:0; padding-left:20px; }
+.modes{ display:grid; gap:10px; }
+.modes div{ padding:12px 14px; border-radius:14px; background:#fff; border:1px solid #e5e8eb; }
+.modes b{ display:block; font-size:15px; color:#191f28; margin-bottom:4px; }
+.modes span{ font-size:14px; line-height:1.6; color:#4e5968; }
+.ctrl{ display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.btn{ display:inline-flex; align-items:center; gap:8px; min-height:44px; padding:0 16px; border-radius:12px; border:1px solid #d1d6db; background:#fff; color:#191f28; cursor:pointer; font-size:15px; font-weight:600; transition:background-color .2s, border-color .2s; }
+.btn:hover{ border-color:#b0b8c1; background:#f9fafb; }
+.btn[aria-pressed="false"]{ color:var(--pink-d); border-color:var(--pink-d); }
+.note{ margin-top:12px; font-size:14px !important; line-height:1.55 !important; color:#4e5968 !important; }
+@media (max-width:860px){ .wrap{ flex-direction:column; gap:28px; } }
+@media (max-width:430px){
+  .wrap{ padding:0 0 32px; }
+  .pbox{ width:100%; height:100dvh; max-height:844px; }
+  .phone{ width:100%; height:100%; border-radius:0; box-shadow:none; }
+  .aside{ padding:0 16px; }
+}
+
+/* ── 무대(캐릭터 영역) ── */
+.stage{ position:absolute; inset:0; z-index:0; background:
+  radial-gradient(120% 70% at 50% 18%, #6d4a86 0%, rgba(109,74,134,0) 60%),
+  linear-gradient(180deg, #2a1d46 0%, #4b2f5f 42%, #b56f6c 78%, #e2a27b 100%); }
+.stage::after{ content:""; position:absolute; left:0; right:0; bottom:0; height:220px; background:linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.55)); }
+/* 2026-11-10 사용자: 캐릭터를 다운로드 폴더의 메이드 복 캐릭터 그림으로(사용자 제공, 흰 바탕은 tools/cutout.py로 지움). 무릎 아래는 화면 밖으로 */
+.chara{ position:absolute; left:50%; bottom:-170px; width:400px; margin-left:-200px; transform-origin:50% 100%; animation:breathe 4.2s ease-in-out infinite; }
+.chara img{ display:block; width:100%; height:auto; transform-origin:50% 30%; }
+.is-speaking .chara img{ animation:talkbob .45s ease-in-out infinite alternate; }   /* 그림이라 입을 못 움직여 말하는 동안 살짝 흔들림으로 대신(실제는 Live2D 립싱크) */
+@keyframes talkbob{ from{ transform:translateY(0) } to{ transform:translateY(-3px) scale(1.004) } }
+.chara .lid{ transform-box:fill-box; transform-origin:50% 0; transform:scaleY(0); animation:blink 5.5s infinite; }
+.chara .mouth{ transform-box:fill-box; transform-origin:50% 30%; transition:transform .12s; }
+.is-speaking .chara .mouth{ animation:talk .28s ease-in-out infinite alternate; }
+.chara-tag{ position:absolute; left:14px; bottom:92px; z-index:1; padding:3px 8px; border-radius:8px; background:rgba(12,10,18,.6); font-size:11px; line-height:1.4; color:#fff; }   /* 토글이 넓어져 위에서 아래 왼쪽으로 옮김 */
+@keyframes breathe{ 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-3px) } }
+@keyframes blink{ 0%,92%,100%{ transform:scaleY(0) } 95%{ transform:scaleY(1) } }
+@keyframes talk{ from{ transform:scaleY(.35) } to{ transform:scaleY(1.25) } }
+
+/* ── 머리 · 모드 전환 ── */
+.top{ position:absolute; left:0; right:0; top:0; z-index:20; padding:10px 8px 0; display:flex; align-items:center; gap:4px;
+  background:linear-gradient(180deg, rgba(8,6,14,.7), rgba(8,6,14,0)); }
+.iconbtn{ width:44px; height:44px; display:grid; place-items:center; border:0; border-radius:12px; background:none; cursor:pointer; color:#fff; transition:background-color .2s; }
+.iconbtn:hover{ background:rgba(255,255,255,.1); }
+.who{ flex:1; min-width:0; display:flex; align-items:center; gap:8px; }
+.who b{ font-size:17px; }
+.who small{ font-size:12px; font-weight:700; color:#ffd1e6; background:rgba(196,0,94,.45); padding:2px 7px; border-radius:6px; }
+.seg{ position:absolute; z-index:20; left:50%; top:62px; transform:translateX(-50%); display:flex; padding:3px; border-radius:999px;
+  background:rgba(12,10,18,.72); box-shadow:inset 0 0 0 1px rgba(255,255,255,.14); backdrop-filter:blur(6px); }
+.seg button{ min-width:96px; height:44px; padding:0 14px; white-space:nowrap; display:inline-flex; align-items:center; justify-content:center; gap:6px; border:0; border-radius:999px; background:none;
+  cursor:pointer; font-size:15px; font-weight:700; color:var(--sub); transition:background-color .2s, color .2s; }
+.seg button .ico{ width:18px; height:18px; }
+.seg button[aria-selected="true"]{ background:var(--pink-d); color:#fff; }
+.seg button:not([aria-selected="true"]):hover{ color:#fff; }
+/* 2026-11-10: 버튼을 덮어 클릭을 막던 .seg::after(장식용 빈 레이어)를 지움 — 사용자 "상단 토글 계속 작동 안해" */
+
+/* ── DM 모드(기존) ── */
+.dm{ position:absolute; left:0; right:0; top:116px; bottom:84px; z-index:10; overflow-y:auto; padding:8px 16px 16px; display:flex; flex-direction:column; gap:10px; scrollbar-width:none; }
+.dm::-webkit-scrollbar{ display:none; }
+.dimmer{ position:absolute; inset:0; z-index:5; background:var(--dim); transition:opacity .3s; }
+.mode-chat .dm,.mode-chat .dimmer{ opacity:0; visibility:hidden; transition:opacity .25s, visibility 0s .25s; }
+.day{ align-self:center; font-size:12px; color:var(--sub); background:rgba(12,10,18,.62); padding:4px 10px; border-radius:999px; }
+.row{ display:flex; flex-direction:column; max-width:84%; }
+.row.me{ align-self:flex-end; align-items:flex-end; }
+.bub{ padding:10px 13px; border-radius:16px; font-size:15px; line-height:1.55; }
+.row.ch .bub{ background:var(--pink-d); border-top-left-radius:6px; }
+.row.me .bub{ background:var(--bub-me); border-top-right-radius:6px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.08); }
+.bub em{ display:block; font-style:normal; color:#ffd9ea; font-size:14px; margin-bottom:2px; }
+.row time{ font-size:11px; color:var(--mute); margin-top:4px; text-shadow:0 1px 2px rgba(0,0,0,.8); }
+.log{ align-self:center; display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--sub); padding:6px 12px; border-radius:999px; background:rgba(12,10,18,.78); box-shadow:inset 0 0 0 1px rgba(255,255,255,.14); }   /* 밝은 캐릭터 위에서도 대비 유지 */
+.log .ico{ width:16px; height:16px; }
+
+/* ── DEEP CHAT 모드(신규) ── */
+.float{ position:absolute; z-index:15; left:28px; right:28px; bottom:150px; text-align:center; font-size:20px; line-height:1.5; font-weight:700;
+  color:#fff; /* 배경 없이 글자만: 자막처럼 검은 테두리를 둘러 어떤 배경에서도 읽히게 */
+  text-shadow:-1.5px -1.5px 0 #0b0a10, 1.5px -1.5px 0 #0b0a10, -1.5px 1.5px 0 #0b0a10, 1.5px 1.5px 0 #0b0a10, 0 -1.5px 0 #0b0a10, 0 1.5px 0 #0b0a10, -1.5px 0 0 #0b0a10, 1.5px 0 0 #0b0a10, 0 2px 10px rgba(0,0,0,.6); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+  opacity:0; transform:translateY(6px); transition:opacity .2s var(--ease), transform .2s var(--ease); pointer-events:none; }
+.float.on{ opacity:1; transform:none; }
+.float.out{ opacity:0; transition:opacity .3s linear; }
+.voice{ position:absolute; z-index:15; left:50%; bottom:100px; transform:translateX(-50%); display:flex; align-items:center; gap:8px; opacity:0; visibility:hidden; transition:opacity .2s; }
+.voice.on{ opacity:1; visibility:visible; }
+.pill{ display:inline-flex; align-items:center; gap:8px; height:40px; padding:0 14px; border-radius:999px; background:rgba(12,10,18,.72); box-shadow:inset 0 0 0 1px rgba(255,255,255,.16); font-size:14px; font-weight:600; color:#fff; }
+.bars{ display:flex; align-items:center; gap:3px; height:18px; }
+.bars i{ width:3px; height:6px; border-radius:2px; background:#ffd1e6; }
+.is-speaking .bars i{ animation:bar .7s ease-in-out infinite alternate; }
+.bars i:nth-child(2){ animation-delay:.15s !important; } .bars i:nth-child(3){ animation-delay:.3s !important; } .bars i:nth-child(4){ animation-delay:.45s !important; }
+@keyframes bar{ from{ height:5px } to{ height:18px } }
+.dots{ display:flex; gap:5px; } .dots i{ width:7px; height:7px; border-radius:50%; background:#fff; opacity:.4; animation:dot 1s infinite; }
+.dots i:nth-child(2){ animation-delay:.15s } .dots i:nth-child(3){ animation-delay:.3s }
+@keyframes dot{ 0%,100%{ opacity:.35 } 50%{ opacity:1 } }
+.replay{ width:44px; height:44px; padding:0; justify-content:center; cursor:pointer; border:0; }
+.hint{ position:absolute; z-index:18; left:16px; right:16px; top:122px; display:flex; gap:10px; align-items:flex-start; padding:12px 8px 12px 14px; border-radius:16px;
+  background:rgba(12,10,18,.8); box-shadow:inset 0 0 0 1px rgba(255,255,255,.14); font-size:14px; line-height:1.55; color:#fff; }
+.hint .ico{ width:20px; height:20px; margin-top:1px; color:#ffd1e6; }
+.hint p{ margin:0; flex:1; } .hint .iconbtn{ width:44px; height:44px; margin:-10px -2px -10px 0; }
+/* ── 2026-11-10 DEEP CHAT 대화 기록: 오른쪽 위 기록 아이콘(글자 없이) → 오른쪽에서 열리는 패널. 내 글 + 캐릭터 답(글) + 답마다 다시 듣기 ── */
+.hist{ position:absolute; inset:0; z-index:40; }
+.hist__scrim{ position:absolute; inset:0; background:rgba(4,3,8,.62); }
+.hist__panel{ position:absolute; top:0; right:0; bottom:0; width:88%; display:flex; flex-direction:column; background:#16141d; box-shadow:-12px 0 40px rgba(0,0,0,.5); }
+.hist__head{ display:grid; grid-template-columns:1fr auto; align-items:center; gap:2px 8px; padding:16px 8px 12px 18px; border-bottom:1px solid #2c2936; }
+.hist__head h2{ margin:0; display:flex; align-items:center; gap:8px; font-size:17px; line-height:24px; }
+.hist__head h2 .ico{ width:20px; height:20px; color:#ffd1e6; }
+.hist__head p{ grid-column:1; margin:0; font-size:13px; line-height:18px; color:var(--sub); }
+.hist__head .iconbtn{ grid-column:2; grid-row:1 / 3; }
+.hist__list{ flex:1; min-height:0; overflow-y:auto; margin:0; padding:12px 16px 24px; list-style:none; display:flex; flex-direction:column; gap:14px; scrollbar-width:thin; }
+.he time{ display:block; font-size:12px; color:var(--mute); margin-bottom:6px; }
+.he__me{ margin:0 0 6px auto; width:fit-content; max-width:86%; padding:8px 12px; border-radius:14px 14px 4px 14px; background:var(--bub-me); font-size:14px; line-height:1.5; }
+.he__ch{ display:grid; grid-template-columns:1fr 44px; align-items:start; gap:4px; max-width:96%; padding:8px 4px 8px 12px; border-radius:14px 14px 14px 4px; background:#2a1420; box-shadow:inset 0 0 0 1px #5b2141; }
+.he__ch p{ margin:0; font-size:14px; line-height:1.55; }
+.he__ch em{ display:block; font-style:normal; font-size:13px; color:#ffc4dc; }
+.he__ch .iconbtn{ width:44px; height:44px; color:#ffd1e6; }
+.he__ch .iconbtn .ico{ width:20px; height:20px; }
+.he__none{ margin:auto 0; text-align:center; font-size:14px; line-height:1.6; color:var(--sub); }
+.hist-dot{ position:absolute; right:8px; top:8px; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:var(--pink-d); color:#fff; font-size:10px; line-height:16px; font-weight:800; text-align:center; }
+#hist-btn{ position:relative; }
+.mute{ position:absolute; z-index:19; left:16px; right:16px; top:122px; padding:14px; border-radius:16px; background:#2a0f1d; box-shadow:inset 0 0 0 1px #7a1f4a; }
+.mute p{ margin:0 0 10px; display:flex; gap:8px; font-size:15px; line-height:1.5; font-weight:600; }
+.mute p .ico{ color:#ffb3d4; width:20px; height:20px; margin-top:1px; }
+.mute div{ display:flex; gap:8px; }
+.mute button{ flex:1; min-height:44px; border-radius:12px; border:0; cursor:pointer; font-size:15px; font-weight:700; transition:filter .2s; }
+.mute button:hover{ filter:brightness(1.12); }
+.mute .a{ background:var(--pink-d); color:#fff; } .mute .b{ background:#3a3445; color:#fff; }
+[hidden]{ display:none !important; }
+
+
+/* ── 2026-11-10 다이나믹 애니메이션 ──
+   원칙(ui-ux-pro-max): transform · opacity(· 한 번만 도는 filter)만 움직임, 들어올 때 ease-out(스프링) · 나갈 때 ease-in,
+   누름 반응 150 ~ 320ms · 장면 전환 0.6 ~ 0.9초, 계속 도는 효과는 상태가 있는 곳만(캐릭터 대기 · 듣는 중 · 말하는 중) */
+:root{ --spring:cubic-bezier(.34,1.56,.64,1); --out:cubic-bezier(.22,1,.36,1); --in:cubic-bezier(.55,0,1,.45); }
+/* 1. 모드 토글: 핑크 알약이 미끄러져 옮겨 감(클릭은 버튼이 받도록 알약은 아래 · pointer-events 없음) */
+.seg__ind{ position:absolute; z-index:0; top:3px; bottom:3px; left:var(--ind-x, 3px); width:var(--ind-w, 96px); border-radius:999px; background:var(--pink-d);
+  box-shadow:0 6px 18px rgba(196,0,94,.45), inset 0 1px 0 rgba(255,255,255,.2); pointer-events:none; opacity:0; transition:left .44s var(--spring), width .44s var(--spring), opacity .2s; }
+.seg.has-ind .seg__ind{ opacity:1; }
+.seg button{ position:relative; z-index:1; transition:color .2s, transform .15s var(--out); }
+.seg.has-ind button[aria-selected="true"]{ background:none; }
+.seg button .ico{ transition:transform .35s var(--spring); }
+.seg button[aria-selected="true"] .ico{ transform:scale(1.18) rotate(-6deg); }
+.seg button:active{ transform:scale(.95); }
+/* 2. 장면 전환 */
+@keyframes idle{ 0%,100%{ transform:translateY(0) rotate(0) } 50%{ transform:translateY(-4px) rotate(.35deg) } }
+.chara{ animation:idle 5s ease-in-out infinite; }
+.phone.to-chat .stage{ animation:stageIn .72s var(--out) both; }
+@keyframes stageIn{ from{ transform:scale(1.07); filter:brightness(.55) saturate(.8) } to{ transform:none; filter:none } }
+.mode-chat .dm{ transform:translateY(20px) scale(.97); transition:opacity .24s var(--in), transform .24s var(--in), visibility 0s .24s; }
+.mode-dm .dm{ transition:opacity .3s var(--out), transform .45s var(--out); }
+.phone.to-dm .dm > *{ animation:rowIn .44s var(--out) both; }
+.phone.to-dm .dm > :nth-last-child(1){ animation-delay:.24s } .phone.to-dm .dm > :nth-last-child(2){ animation-delay:.19s }
+.phone.to-dm .dm > :nth-last-child(3){ animation-delay:.14s } .phone.to-dm .dm > :nth-last-child(4){ animation-delay:.09s }
+.phone.to-dm .dm > :nth-last-child(5){ animation-delay:.04s }
+@keyframes rowIn{ from{ opacity:0; transform:translateY(16px) } to{ opacity:1; transform:none } }
+/* 3. 새 말풍선 · 입력 중 */
+.row.is-new{ animation:bubIn .4s var(--spring) both; }
+.row.me.is-new{ transform-origin:100% 100%; } .row.ch.is-new{ transform-origin:0 100%; }
+@keyframes bubIn{ from{ opacity:0; transform:translateY(12px) scale(.84) } to{ opacity:1; transform:none } }
+.log.is-new{ animation:rowIn .42s var(--out) both; }
+.row.typing{ align-self:flex-start; } .row.typing .bub{ align-self:flex-start; display:flex; align-items:center; height:40px; padding:0 16px; }
+/* 4. DEEP CHAT 4초 글자: 아래에서 흐릿하게 떠올라 또렷해지고, 4초 뒤 위로 흩어짐(끝나는 시각 4.3초는 그대로) */
+.float{ transition:none; }
+.float.on{ animation:floatIn .38s var(--out) both; }
+.float.on.out{ animation:floatOut .3s var(--in) both; }
+@keyframes floatIn{ from{ opacity:0; transform:translateY(18px) scale(.95); filter:blur(6px) } to{ opacity:1; transform:none; filter:blur(0) } }
+@keyframes floatOut{ from{ opacity:1; transform:none; filter:blur(0) } to{ opacity:0; transform:translateY(-16px); filter:blur(5px) } }
+/* 5. 듣는 중 · 말하는 중 */
+.dots i{ opacity:1; animation:dotJump 1s var(--out) infinite; }
+@keyframes dotJump{ 0%,60%,100%{ transform:translateY(0); opacity:.45 } 30%{ transform:translateY(-6px); opacity:1 } }
+#think.on .pill, .voice.on .pill{ animation:popIn .36s var(--spring) both; }
+.voice.on .replay:not([hidden]){ animation:popIn .36s var(--spring) .08s both; }
+@keyframes popIn{ from{ opacity:0; transform:translateY(10px) scale(.78) } to{ opacity:1; transform:none } }
+.aura{ position:absolute; left:50%; top:14%; width:440px; height:440px; margin-left:-220px; border-radius:50%; pointer-events:none;
+  background:radial-gradient(circle, rgba(255,64,160,.36) 0%, rgba(255,64,160,.12) 42%, rgba(255,64,160,0) 68%); opacity:0; transform:scale(.85);
+  transition:opacity .35s var(--out), transform .35s var(--out); }
+.is-speaking .aura{ opacity:1; transform:scale(1); animation:auraPulse 1.4s ease-in-out infinite; }
+@keyframes auraPulse{ 0%,100%{ transform:scale(.95); opacity:.8 } 50%{ transform:scale(1.07); opacity:1 } }
+.phone.to-chat .aura{ animation:auraFlash .9s var(--out); }
+@keyframes auraFlash{ 0%{ opacity:0; transform:scale(.55) } 35%{ opacity:1 } 100%{ opacity:0; transform:scale(1.3) } }
+/* 6. 보내기 */
+.send{ position:relative; transition:filter .2s, transform .15s var(--out), background-color .2s; }
+.send:not(:disabled){ animation:sendReady .42s var(--spring); }
+.send:active:not(:disabled){ transform:scale(.88); }
+.send.pulse::after{ content:""; position:absolute; inset:-2px; border-radius:50%; border:2px solid rgba(255,77,166,.85); pointer-events:none; animation:ripple .55s var(--out) forwards; }
+@keyframes sendReady{ from{ transform:scale(.82) } to{ transform:scale(1) } }
+@keyframes ripple{ from{ transform:scale(1); opacity:1 } to{ transform:scale(1.75); opacity:0 } }
+.bar input{ transition:background-color .2s, box-shadow .2s; }
+.bar input:focus{ background:rgba(255,255,255,.2); box-shadow:inset 0 0 0 1.5px rgba(255,209,230,.65), 0 0 0 4px rgba(196,0,94,.28); }
+/* 7. 안내 띠 · 기록 패널 */
+.hint:not([hidden]), .mute:not([hidden]){ animation:dropIn .36s var(--out) both; }
+@keyframes dropIn{ from{ opacity:0; transform:translateY(-14px) scale(.97) } to{ opacity:1; transform:none } }
+.hist:not([hidden]) .hist__scrim{ animation:fadeIn .26s var(--out) both; }
+@keyframes fadeIn{ from{ opacity:0 } to{ opacity:1 } }
+.hist__panel{ animation:histIn .38s var(--out); }
+@keyframes histIn{ from{ transform:translateX(48px); opacity:0 } to{ transform:none; opacity:1 } }
+.he{ animation:heIn .36s var(--out) both; animation-delay:calc(var(--i, 0) * 45ms + 80ms); }
+@keyframes heIn{ from{ opacity:0; transform:translateX(18px) } to{ opacity:1; transform:none } }
+.hist-dot.bump{ animation:bump .5s var(--spring); }
+@keyframes bump{ 0%{ transform:scale(.5) } 60%{ transform:scale(1.3) } 100%{ transform:scale(1) } }
+#hist-btn .ico, .replay .ico, .iconbtn .ico{ transition:transform .4s var(--spring); }
+#hist-btn:hover .ico{ transform:rotate(-35deg); } #hist-btn:active .ico{ transform:rotate(-200deg); }
+.replay:active .ico{ transform:rotate(-220deg); }
+.iconbtn:active{ transform:scale(.92); } .iconbtn{ transition:background-color .2s, transform .15s var(--out); }
+
+/* ── 입력 ── */
+.bar{ position:absolute; z-index:20; left:0; right:0; bottom:0; padding:12px 12px 24px; display:flex; gap:8px; align-items:center;
+  background:linear-gradient(180deg, rgba(8,6,14,0), rgba(8,6,14,.85) 35%); }
+.bar label{ flex:1; }
+.bar input{ width:100%; height:48px; padding:0 18px; border-radius:24px; border:0; background:rgba(255,255,255,.14); color:#fff; font:inherit; font-size:16px;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.16); }
+.bar input::placeholder{ color:#cfcbd8; }
+.bar input:focus-visible{ outline:3px solid #ffd1e6; outline-offset:1px; }
+.send{ width:48px; height:48px; flex:none; display:grid; place-items:center; border:0; border-radius:50%; background:var(--pink-d); color:#fff; cursor:pointer; transition:filter .2s; }
+.send:hover{ filter:brightness(1.12); }
+.send:disabled{ background:#3a3445; color:#a9a4b6; cursor:not-allowed; filter:none; }
+.count{ position:absolute; right:76px; bottom:6px; font-size:11px; color:var(--mute); }
+
+/* ── 캡처 · 움직임 줄이기 ── */
+body.shot{ background:#000; } body.shot .wrap{ display:block; padding:0; } body.shot .aside{ display:none; }
+body.shot .phone{ border-radius:0; box-shadow:none; transform:none !important; }
+body.shot .pbox{ width:390px !important; height:844px !important; }
+body.shot .tut, body.shot .tut-open{ display:none !important; }
+body.shot *, body.shot *::before, body.shot *::after{ animation:none !important; transition:none !important; }
+body.shot .is-speaking .chara .mouth{ transform:scaleY(1.2); }
+body.shot .is-speaking .bars i:nth-child(1){ height:9px } body.shot .is-speaking .bars i:nth-child(2){ height:17px }
+body.shot .is-speaking .bars i:nth-child(3){ height:12px } body.shot .is-speaking .bars i:nth-child(4){ height:6px }
+/* 움직임: 포트폴리오와 같은 결정(사용자 PC가 '움직임 줄이기'라 OS 설정을 따르면 안 보임, 2026-11-04 · 11-10) — OS 설정과 관계없이 재생하고,
+   필요한 사람은 오른쪽 [움직임 끄기]로 끈다(html.calm). 캡처(body.shot)도 끔 */
+html.calm .phone *, html.calm .phone *::before, html.calm .phone *::after{ animation:none !important; transition:none !important; }
+html.calm .is-speaking .bars i{ height:12px; }
+
+/* ── 설명 레이어: 포트폴리오 시연 팝업의 다른 시연(02 웹앱 기획 demo/sfc-office.html 등)과 같은 튜토리얼 ── */
+.tut[hidden]{display:none}
+.tut{position:fixed;inset:0;z-index:99999;pointer-events:auto;cursor:default;
+  overscroll-behavior:contain;-webkit-user-select:none;user-select:none;
+  font-family:'Pretendard Variable',Pretendard,-apple-system,'Malgun Gothic',sans-serif}
+html.tut-lock, html.tut-lock body{-webkit-user-select:none;user-select:none}
+html.tut-lock body{cursor:default}
+.tut__ring{position:absolute;border-radius:10px;pointer-events:none;
+  box-shadow:0 0 0 9999px rgba(0,12,30,.66), 0 0 0 3px #3182f6;
+  transition:top .32s cubic-bezier(.22,1,.36,1),left .32s cubic-bezier(.22,1,.36,1),
+             width .32s cubic-bezier(.22,1,.36,1),height .32s cubic-bezier(.22,1,.36,1)}
+.tut__pop{position:absolute;pointer-events:auto;width:min(360px,calc(100vw - 32px));padding:18px 20px 16px;
+  background:#fff;border-radius:16px;box-shadow:0 20px 50px rgba(0,12,30,.36);
+  transition:top .32s cubic-bezier(.22,1,.36,1),left .32s cubic-bezier(.22,1,.36,1)}
+.tut__no{display:flex;align-items:center;gap:7px;margin:0 0 8px;
+  font-size:14px;font-weight:800;letter-spacing:.04em;color:#3182f6}
+.tut__no i{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:#3182f6;font-style:normal}
+.tut__txt{margin:0;font-size:14px;line-height:1.72;color:#333d4b;word-break:keep-all}
+.tut__txt b{font-weight:700;color:#191f28}
+.tut__acts{display:flex;align-items:center;gap:8px;margin-top:16px}
+.tut__acts button{height:36px;padding:0 14px;border:0;border-radius:10px;cursor:pointer;
+  font-family:inherit;font-size:14px;font-weight:700;letter-spacing:-.01em}
+.tut__skip{margin-right:auto;background:none;color:#6b7684}   /* 흰 바탕 3.0 → 4.8:1 */
+.tut__skip:hover{color:#4e5968}
+.tut__prev{background:#f2f4f6;color:#4e5968}
+.tut__prev:hover{background:#e5e8eb}
+.tut__prev[disabled]{opacity:.4;cursor:default}
+.tut__next{background:#3182f6;color:#fff}
+.tut__next:hover{background:#2272eb}
+@media(max-width:640px){
+  .tut__pop{width:calc(100vw - 24px);left:12px !important}
+  .tut__acts button{height:44px;min-width:44px}   /* MO 누름 44px(2026-11-10) */
+  .tut-open{height:44px}
+}
+@media(prefers-reduced-motion:reduce){
+  .tut__ring,.tut__pop{transition:none}
+}
+.tut-open{position:fixed;right:16px;bottom:16px;z-index:9998;display:inline-flex;align-items:center;gap:7px;
+  height:38px;padding:0 15px;border:0;border-radius:999px;cursor:pointer;
+  background:#3182f6;color:#fff;box-shadow:0 6px 18px rgba(49,130,246,.34);
+  font-family:'Pretendard Variable',Pretendard,-apple-system,'Malgun Gothic',sans-serif;
+  font-size:14px;font-weight:700;letter-spacing:-.01em;transition:background .16s,transform .16s}
+.tut-open:hover{background:#2272eb;transform:translateY(-2px)}
+.tut-open svg{width:15px;height:15px;flex:0 0 15px}
+.tut:not([hidden]) ~ .tut-open{display:none}
+@media(prefers-reduced-motion:reduce){ .tut-open:hover{transform:none} }
+/* 포트폴리오 모달 안: 설명 단추는 모달 아래 '설명 다시 보기'가 맡는다 */
+.in-frame .tut-open{display:none}
+/* 휴대전화 폭(단독으로 열 때): 떠 있는 '설명 보기'가 보내기 버튼을 덮어 페이지 맨 아래로 옮김(2026-11-10) */
+@media (max-width:430px){ .tut-open{ position:static; display:flex; margin:8px auto 28px; box-shadow:none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="pbox" id="pbox">
+  <div class="phone mode-dm" id="phone" aria-label="AOi 대화 화면 시안">
+    <div class="stage" aria-hidden="true">
+      <div class="aura"></div>
+      <div class="chara" id="chara">
+        <img src="img/chara_maid.webp" alt="" width="739" height="1536" decoding="async">
+      </div>
+      <span class="chara-tag">시안용 이미지<br>실제는 Live2D</span>
+    </div>
+    <div class="dimmer" aria-hidden="true"></div>
+
+    <div class="top">
+      <button type="button" class="iconbtn" aria-label="뒤로" data-mk="back"><svg class="ico" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></button>
+      <div class="who" data-mk="who"><b>하루</b><small>Lv.3</small></div>
+      <button type="button" class="iconbtn" id="hist-btn" aria-label="DEEP CHAT 대화 기록 보기" aria-haspopup="dialog" aria-controls="hist" hidden data-mk="hist-btn"><svg class="ico" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span class="hist-dot" id="hist-dot" hidden aria-hidden="true"></span></button>
+      <button type="button" class="iconbtn" aria-label="더 보기"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>
+    </div>
+    <div class="seg" role="tablist" aria-label="대화 모드" data-mk="seg">
+      <span class="seg__ind" aria-hidden="true"></span>
+      <button type="button" role="tab" id="tab-dm" aria-selected="true" aria-controls="dm" data-mode="dm"><svg class="ico" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></svg>DM</button>
+      <button type="button" role="tab" id="tab-chat" aria-selected="false" data-mode="chat"><svg class="ico" viewBox="0 0 24 24"><path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/><path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/></svg>DEEP CHAT</button>
+    </div>
+
+    <div class="dm" id="dm" role="log" aria-label="DM 대화 기록" aria-labelledby="tab-dm" data-mk="dm"></div>
+
+    <div class="hint" id="hint" hidden data-mk="hint">
+      <svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      <p>DEEP CHAT 모드에서는 보낸 글이 4초 뒤 사라지고, 하루가 목소리로 답해요. 글로 남기려면 DM 모드를 쓰세요.</p>
+      <button type="button" class="iconbtn" id="hint-x" aria-label="안내 닫기"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="mute" id="mute" role="alert" hidden data-mk="mute">
+      <p><svg class="ico" viewBox="0 0 24 24"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><line x1="22" x2="16" y1="9" y2="15"/><line x1="16" x2="22" y1="9" y2="15"/></svg>소리가 꺼져 있어 하루의 답을 들을 수 없어요.</p>
+      <div><button type="button" class="a" id="mute-on">소리 켜고 듣기</button><button type="button" class="b" id="mute-dm">DM에서 글로 보기</button></div>
+    </div>
+
+    <p class="float" id="float" aria-hidden="true" data-mk="float"></p>
+    <div class="voice" id="voice" data-mk="voice">
+      <span class="pill" id="voice-pill" role="status" aria-live="polite"><span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span id="voice-t">말하는 중</span></span>
+      <button type="button" class="pill replay" id="replay" aria-label="마지막 답 다시 듣기" hidden data-mk="replay"><svg class="ico" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg></button>
+    </div>
+    <div class="voice" id="think" aria-hidden="true"><span class="pill"><span class="dots"><i></i><i></i><i></i></span></span></div>
+
+    <form class="bar" id="bar" autocomplete="off" data-mk="bar">
+      <label><span class="sr">메시지</span><input id="msg" type="text" maxlength="100" placeholder="하루에게 메시지 보내기" enterkeyhint="send"></label>
+      <button type="submit" class="send" id="send" aria-label="보내기" disabled data-mk="send"><svg class="ico" viewBox="0 0 24 24"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></button>
+    </form>
+    <div class="hist" id="hist" hidden role="dialog" aria-modal="true" aria-labelledby="hist-t" data-mk="hist">
+      <div class="hist__scrim" data-hist-close></div>
+      <section class="hist__panel" data-mk="hist-panel">
+        <header class="hist__head"><h2 id="hist-t"><svg class="ico" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>대화 기록</h2><p>DEEP CHAT에서 주고받은 말 · 지문은 위 작은 글</p><button type="button" class="iconbtn" id="hist-x" data-hist-close aria-label="대화 기록 닫기" data-mk="hist-x"><svg class="ico" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></header>
+        <ol class="hist__list" id="hist-list" data-mk="hist-list"></ol>
+      </section>
+    </div>
+    <p class="sr" id="sr-live" aria-live="polite"></p>
+  </div>
+  </div>
+
+  <aside class="aside" aria-label="프로토타입 설명">
+    <h1>AOi 대화 모드 분리<br>프로토타입</h1>
+    <p class="by">개선안 시안 · 2026. 11. · PSH</p>
+    <h2>두 모드</h2>
+    <div class="modes">
+      <div><b>DM 모드 (기존)</b><span>주고받은 메시지가 말풍선으로 계속 남는 메신저형. 지난 대화를 다시 읽을 때.</span></div>
+      <div><b>DEEP CHAT 모드 (신규)</b><span>보낸 글은 말풍선 없이 글자만 4초 보였다 사라지고, 캐릭터는 글 없이 목소리로만 답하는 대화형. 캐릭터를 보며 말 걸 때.</span></div>
+    </div>
+    <h2>해 보기</h2>
+    <ol>
+      <li>휴대전화 화면 위 [DEEP CHAT]을 누릅니다.</li>
+      <li>글을 보내면 4초 뒤 사라지는지 봅니다.</li>
+      <li>캐릭터가 목소리로 답합니다(브라우저 음성).</li>
+      <li>오른쪽 위 기록 아이콘으로 DEEP CHAT 대화를 다시 봅니다.</li>
+      <li>[기기 소리]를 끄고 보내면 안내가 뜹니다.</li>
+      <li>[DM]으로 돌아가면 DEEP CHAT 모드 대화가 한 줄로 남습니다.</li>
+    </ol>
+    <div class="ctrl">
+      <button type="button" class="btn" id="snd" aria-pressed="true"><svg class="ico" viewBox="0 0 24 24"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg><span>기기 소리 켜짐</span></button>
+      <button type="button" class="btn" id="calm" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg><span>움직임 끄기</span></button>
+      <button type="button" class="btn" id="reset"><svg class="ico" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>처음 상태로</button>
+    </div>
+    <p class="note">캐릭터는 시안용 캐릭터 이미지입니다(실제 서비스는 Live2D 모델). 목소리는 브라우저 음성 합성으로 흉내 냈고, 브라우저에 한국어 음성이 없으면 소리 없이 움직임만 보입니다. 답은 미리 정해 둔 문장입니다.</p>
+  </aside>
+</div>
+
+<div class="tut" id="tut" hidden>
+  <div class="tut__ring" id="tutRing"></div>
+  <div class="tut__pop" id="tutPop" role="dialog" aria-label="프로토타입 설명">
+    <p class="tut__no"><i></i><span id="tutNo">1 / 8</span></p>
+    <p class="tut__txt" id="tutTxt"></p>
+    <div class="tut__acts">
+      <button type="button" class="tut__skip" id="tutSkip">건너뛰기</button>
+      <button type="button" class="tut__prev" id="tutPrev">이전</button>
+      <button type="button" class="tut__next" id="tutNext">다음</button>
+    </div>
+  </div>
+</div>
+<button type="button" class="tut-open" id="tutOpen">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+  설명 보기
+</button>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var phone = $('phone'), dm = $('dm'), float = $('float'), voice = $('voice'), think = $('think'), replay = $('replay'), vt = $('voice-t'),
+      hint = $('hint'), mute = $('mute'), msg = $('msg'), send = $('send'), live = $('sr-live');
+  var SHOW_MS = 4000, FADE_MS = 300;                    /* 정책: 보낸 글 4초 표시 → 0.3초 사라짐 */
+  var S = { mode:'dm', sound:true, hintSeen:false, session:null, last:'', sent:'', pending:null, timers:[], log:[] };   /* log: DEEP CHAT 대화 기록 */
+  var REPLIES = [
+    '*고개를 갸웃한다* 그랬구나. 그 얘기 조금만 더 해 줄래?',
+    '*살짝 웃는다* 듣고 있어. 오늘은 네 얘기를 제일 먼저 듣고 싶었거든.',
+    '*턱을 괴며 생각한다* 음, 나라면 일단 따뜻한 차부터 마실 것 같아.',
+    '*손뼉을 친다* 좋아! 그럼 내일은 그 일부터 같이 정리해 보자.'
+  ];
+  var ri = 0;
+  var SEED = [
+    ['day', '2026. 11. 9.'],
+    ['ch', '*창밖을 보다가 고개를 돌린다* 왔구나! 오늘 하루는 어땠어?', '오후 9:02'],
+    ['me', '퇴근하고 이제 막 들어왔어', '오후 9:03'],
+    ['ch', '*반갑게 손을 흔든다* 수고 많았어. 저녁은 먹었어? 오늘은 내가 얘기 들어 줄게. 무슨 일이 제일 기억에 남아?', '오후 9:03'],
+    ['me', '회의가 길어서 좀 지쳤어', '오후 9:04'],
+    ['ch', '*소파 쪽으로 몸을 기울인다* 긴 회의는 정말 기운 빠지지. 그래도 끝까지 버틴 거잖아. 그 회의에서 제일 힘들었던 순간이 언제였는지 말해 줄래? 천천히 해도 괜찮아. 나는 여기서 계속 기다릴게.', '오후 9:05']
+  ];
+  function esc(s){ return s.replace(/[&<>]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }); }
+  function split(t){ var m = t.match(/^\*(.+?)\*\s*(.*)$/); return m ? { act:m[1], say:m[2] } : { act:'', say:t }; }
+  function now(){ var d = new Date(), h = d.getHours(), m = ('0' + d.getMinutes()).slice(-2); return (h < 12 ? '오전 ' : '오후 ') + ((h % 12) || 12) + ':' + m; }
+  function addRow(kind, text, time){
+    var el;
+    if (kind === 'day'){ el = document.createElement('p'); el.className = 'day'; el.textContent = text; }
+    else if (kind === 'log'){ el = document.createElement('p'); el.className = 'log'; el.setAttribute('data-mk', 'log');
+      el.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>' + esc(text); }
+    else { el = document.createElement('div'); el.className = 'row ' + kind; var p = split(text);
+      el.innerHTML = '<div class="bub">' + (p.act ? '<em>' + esc(p.act) + '</em>' : '') + esc(p.say) + '</div><time>' + esc(time) + '</time>'; }
+    if (!S.seeding && kind !== 'day') el.classList.add('is-new');   /* 새로 생긴 말풍선만 튀어 오름 */
+    dm.appendChild(el); dm.scrollTop = dm.scrollHeight; return el;
+  }
+  function addTyping(){                                              /* DM: 캐릭터 입력 중(점 3개 말풍선) */
+    var el = document.createElement('div'); el.className = 'row ch typing is-new'; el.setAttribute('aria-hidden', 'true');
+    el.innerHTML = '<div class="bub"><span class="dots"><i></i><i></i><i></i></span></div>'; dm.appendChild(el); dm.scrollTop = dm.scrollHeight; return el;
+  }
+  function placeInd(){                                               /* 토글 알약 위치 · 폭 = 고른 버튼 */
+    var seg = document.querySelector('.seg'), b = seg.querySelector('button[aria-selected="true"]'); if (!b) return;
+    seg.style.setProperty('--ind-x', b.offsetLeft + 'px'); seg.style.setProperty('--ind-w', b.offsetWidth + 'px'); seg.classList.add('has-ind');
+  }
+  function seed(){ S.seeding = true; dm.innerHTML = ''; SEED.forEach(function(r){ addRow(r[0], r[1], r[2]); }); S.seeding = false; }
+  function clearTimers(){ S.timers.forEach(clearTimeout); S.timers = []; }
+  function later(fn, ms){ var t = setTimeout(fn, ms); S.timers.push(t); return t; }
+  function stopVoice(){ try { speechSynthesis.cancel(); } catch(e){} phone.classList.remove('is-speaking'); }
+
+  function setMode(m){
+    if (m === S.mode) return;
+    stopVoice(); clearTimers(); think.classList.remove('on'); voice.classList.remove('on'); float.className = 'float'; float.textContent = ''; mute.hidden = true;
+    if (S.mode === 'chat' && S.session && S.session.n > 0){            /* 정책: DEEP CHAT 모드 대화는 DM에 한 줄로만 남김 */
+      var min = Math.max(1, Math.round((Date.now() - S.session.t0) / 60000));
+      addRow('log', 'DEEP CHAT 모드 대화 ' + S.session.n + '번 · ' + min + '분 · ' + S.session.at);
+    }
+    S.session = null; S.mode = m;
+    phone.classList.toggle('mode-chat', m === 'chat'); phone.classList.toggle('mode-dm', m === 'dm');
+    document.querySelectorAll('.seg button').forEach(function(b){ b.setAttribute('aria-selected', b.dataset.mode === m ? 'true' : 'false'); });
+    placeInd();
+    phone.classList.remove('to-chat', 'to-dm'); void phone.offsetWidth; phone.classList.add(m === 'chat' ? 'to-chat' : 'to-dm');   /* 장면 전환 */
+    clearTimeout(S.tt); S.tt = setTimeout(function(){ phone.classList.remove('to-chat', 'to-dm'); }, 950);
+    hint.hidden = !(m === 'chat' && !S.hintSeen);
+    $('hist-btn').hidden = m !== 'chat'; closeHist(true);   /* 기록 아이콘은 DEEP CHAT에서만(DM은 말풍선이 곧 기록) */
+    live.textContent = m === 'chat' ? 'DEEP CHAT 모드. 보낸 글은 4초 뒤 사라지고 목소리로 답합니다.' : 'DM 모드. 대화가 기록으로 남습니다.';
+    if (m === 'dm') dm.scrollTop = dm.scrollHeight;
+  }
+  function showFloat(t){
+    float.textContent = t; float.className = 'float'; void float.offsetWidth; float.className = 'float on';
+    later(function(){ float.className = 'float on out'; later(function(){ float.className = 'float'; float.textContent = ''; }, FADE_MS); }, SHOW_MS);
+  }
+  function speak(text){
+    var say = split(text).say;                                        /* 정책: 지문(*…*)은 말하지 않고 표정 · 동작으로 */
+    S.last = say; replay.hidden = true; vt.textContent = '말하는 중'; voice.classList.add('on'); phone.classList.add('is-speaking');
+    var done = function(){ phone.classList.remove('is-speaking'); vt.textContent = '다 들었어요'; replay.hidden = false; };
+    var ok = false;
+    try {
+      if ('speechSynthesis' in window){
+        var u = new SpeechSynthesisUtterance(say); u.lang = 'ko-KR'; u.rate = 1.02; u.pitch = 1.25;
+        var v = speechSynthesis.getVoices().filter(function(x){ return /ko/i.test(x.lang); })[0]; if (v){ u.voice = v; ok = true; }
+        if (ok){ u.onend = done; u.onerror = done; speechSynthesis.speak(u); }
+      }
+    } catch(e){ ok = false; }
+    if (!ok) later(done, Math.min(6000, 900 + say.length * 110));    /* 음성이 없으면 길이만큼 움직임만 */
+  }
+  function reply(text, entry){
+    think.classList.remove('on');
+    if (entry){ entry.reply = text; renderHist(); }   /* 기록에는 답을 글로 남김(화면에는 글 없이 음성만) */
+    if (S.mode !== 'chat') return;
+    if (!S.sound){ S.pending = text; mute.hidden = false; voice.classList.remove('on'); return; }   /* 정책: 소리 꺼짐이면 음성을 틀지 않고 안내 */
+    speak(text);
+  }
+  function submit(e){
+    e.preventDefault();
+    var t = msg.value.trim(); if (!t) return;
+    msg.value = ''; send.disabled = true;
+    var r = REPLIES[ri++ % REPLIES.length];
+    send.classList.remove('pulse'); void send.offsetWidth; send.classList.add('pulse'); setTimeout(function(){ send.classList.remove('pulse'); }, 600);
+    if (S.mode === 'dm'){
+      addRow('me', t, now()); live.textContent = '보냄';
+      var ty; later(function(){ ty = addTyping(); }, 250);
+      later(function(){ if (ty) ty.remove(); addRow('ch', r, now()); }, 1100);
+      return;
+    }
+    clearTimers(); stopVoice(); mute.hidden = true; voice.classList.remove('on');   /* 정책: 말하는 중에 보내면 말을 멈추고 새 글에 답함 */
+    if (!S.hintSeen){ S.hintSeen = true; hint.hidden = true; }
+    if (!S.session) S.session = { t0:Date.now(), n:0, at:now() };
+    S.session.n++; S.pending = null; S.sent = t;
+    var entry = { me:t, time:now(), reply:'' }; S.log.push(entry); renderHist();
+    showFloat(t); live.textContent = '보냄';
+    think.classList.add('on');
+    later(function(){ reply(r, entry); }, 1000);
+  }
+  $('bar').addEventListener('submit', submit);
+  msg.addEventListener('input', function(){ send.disabled = !msg.value.trim(); });
+  document.querySelectorAll('.seg button').forEach(function(b){ b.addEventListener('click', function(){ setMode(b.dataset.mode); }); });
+  $('hint-x').addEventListener('click', function(){ S.hintSeen = true; hint.hidden = true; msg.focus({ preventScroll:true }); });
+  replay.addEventListener('click', function(){ if (S.last){ stopVoice(); speak(S.last); } });
+  $('mute-on').addEventListener('click', function(){ setSound(true); mute.hidden = true; if (S.pending){ var p = S.pending; S.pending = null; speak(p); } });
+  /* 정책: 소리 꺼짐에서 [DM에서 글로 보기] → 보낸 글과 답을 DM 말풍선으로 옮기고, 이 대화는 DEEP CHAT 모드 요약 한 줄에서 뺌 */
+  $('mute-dm').addEventListener('click', function(){ var p = S.pending, t = S.sent; S.pending = null; if (p && S.session) S.session.n--; setMode('dm'); if (p){ addRow('me', t, now()); addRow('ch', p, now()); } });
+  function setSound(on){ S.sound = on; var b = $('snd'); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.querySelector('span').textContent = on ? '기기 소리 켜짐' : '기기 소리 꺼짐'; if (!on) stopVoice(); }
+  $('snd').addEventListener('click', function(){ setSound(!S.sound); });
+  $('calm').addEventListener('click', function(){ var on = !document.documentElement.classList.contains('calm'); document.documentElement.classList.toggle('calm', on);
+    this.setAttribute('aria-pressed', on ? 'true' : 'false'); this.querySelector('span').textContent = on ? '움직임 켜기' : '움직임 끄기'; });
+  placeInd(); if (document.fonts && document.fonts.ready) document.fonts.ready.then(placeInd); addEventListener('resize', placeInd);
+  $('reset').addEventListener('click', function(){ stopVoice(); clearTimers(); S.mode = 'chat'; S.session = null; S.hintSeen = false; S.log = []; setMode('dm'); seed(); setSound(true); renderHist(); });
+  if ('speechSynthesis' in window) try { speechSynthesis.getVoices(); speechSynthesis.onvoiceschanged = function(){}; } catch(e){}
+  seed();
+
+  /* ── DEEP CHAT 대화 기록 패널 ── */
+  var hist = $('hist'), histList = $('hist-list'), histBtn = $('hist-btn'), histDot = $('hist-dot'), histOpener = null;
+  function renderHist(){
+    histDot.hidden = !S.log.length; histDot.textContent = S.log.length > 9 ? '9+' : String(S.log.length);
+    if (S.log.length > (S.histN || 0)){ histDot.classList.remove('bump'); void histDot.offsetWidth; histDot.classList.add('bump'); } S.histN = S.log.length;
+    histBtn.setAttribute('aria-label', 'DEEP CHAT 대화 기록 보기' + (S.log.length ? ', ' + S.log.length + '개' : ''));
+    if (!S.log.length){ histList.innerHTML = '<li class="he__none">아직 DEEP CHAT에서 나눈 대화가 없어요.<br>글을 보내면 여기에 남습니다.</li>'; return; }
+    histList.innerHTML = S.log.map(function(e, i){
+      var p = e.reply ? split(e.reply) : null;
+      return '<li class="he" style="--i:' + Math.min(i, 10) + '"><time>' + esc(e.time) + '</time><p class="he__me">' + esc(e.me) + '</p>'
+        + (p ? '<div class="he__ch"><p>' + (p.act ? '<em>' + esc(p.act) + '</em>' : '') + esc(p.say) + '</p><button type="button" class="iconbtn" data-hist-play="' + i + '" aria-label="이 답 다시 듣기"' + (i === 0 ? ' data-mk="hist-play"' : '') + '>'
+          + '<svg class="ico" viewBox="0 0 24 24"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg></button></div>'
+          : '<div class="he__ch"><p><em>답을 준비하는 중</em></p></div>') + '</li>';
+    }).join('');
+  }
+  function openHist(){ renderHist(); histOpener = document.activeElement; hist.hidden = false; histBtn.setAttribute('aria-expanded', 'true'); histList.scrollTop = histList.scrollHeight; $('hist-x').focus({ preventScroll:true }); }
+  function closeHist(silent){ if (hist.hidden) return; hist.hidden = true; histBtn.setAttribute('aria-expanded', 'false'); if (!silent && histOpener && histOpener.focus) histOpener.focus({ preventScroll:true }); }
+  histBtn.addEventListener('click', openHist);
+  hist.querySelectorAll('[data-hist-close]').forEach(function(b){ b.addEventListener('click', function(){ closeHist(); }); });
+  histList.addEventListener('click', function(e){
+    var b = e.target.closest('[data-hist-play]'); if (!b) return;
+    var en = S.log[+b.dataset.histPlay]; if (!en || !en.reply) return;
+    if (!S.sound){ live.textContent = '소리가 꺼져 있어 들을 수 없어요. 글은 기록에서 읽을 수 있습니다.'; return; }
+    stopVoice(); speak(en.reply);
+  });
+  document.addEventListener('keydown', function(e){ if (e.key === 'Escape' && !hist.hidden){ e.stopPropagation(); closeHist(); } });
+  renderHist();
+
+  /* 휴대전화를 화면 높이에 맞춰 줄임(시연 팝업 안 · 낮은 화면). 430px 이하는 휴대전화 화면 그대로 */
+  var pbox = $('pbox');
+  function fit(){
+    if (document.body.classList.contains('shot')) return;
+    var s = 1;
+    if (innerWidth > 430) s = Math.min(1, (innerHeight - 48) / 866);
+    phone.style.transform = s < 1 ? 'scale(' + s.toFixed(4) + ')' : '';
+    pbox.style.width = s < 1 ? Math.round(390 * s) + 'px' : '';
+    pbox.style.height = s < 1 ? Math.round(844 * s) + 'px' : '';
+  }
+  fit(); addEventListener('resize', fit);
+
+  /* ── 설명 레이어(다른 시연과 같은 튜토리얼). 단계마다 화면 상태를 맞추고, 닫으면 처음 상태로 ── */
+  var tut = $('tut'), ring = $('tutRing'), pop = $('tutPop'), tno = $('tutNo'), ttxt = $('tutTxt'), tprev = $('tutPrev'), tnext = $('tutNext'), tskip = $('tutSkip');
+  function quiet(){ stopVoice(); clearTimers(); think.classList.remove('on'); mute.hidden = true; hint.hidden = true; }
+  function toDM(){ quiet(); if (S.mode !== 'dm'){ S.session = null; setMode('dm'); } }
+  function toChat(){ quiet(); if (S.mode !== 'chat'){ setMode('chat'); } hint.hidden = true; float.className = 'float'; float.textContent = ''; voice.classList.remove('on'); phone.classList.remove('is-speaking'); }
+  var STEPS = [
+    { sel:'.seg', txt:'대화 화면 위 <b>[DM | DEEP CHAT]으로 대화 모드를 고릅니다.</b> 지금은 기존 방식인 DM 모드입니다.', before:function(){ toDM(); } },
+    { sel:'#dm', txt:'DM 모드는 기존처럼 <b>주고받은 말풍선이 계속 남습니다.</b> 지난 대화를 다시 읽을 때 씁니다.', before:function(){ toDM(); } },
+    { sel:'#chara', txt:'DEEP CHAT 모드는 <b>말풍선 없이 캐릭터를 화면 전체로</b> 보여 줍니다. 대화 중에도 표정과 동작이 가려지지 않습니다.', before:function(){ toChat(); } },
+    { sel:'#float', txt:'글을 보내면 <b>말풍선 없이 글자만 4초</b> 보였다가 사라집니다.', before:function(){ toChat(); float.textContent = '오늘 회의가 길어서 좀 지쳤어'; float.className = 'float on'; } },
+    { sel:'#voice', txt:'캐릭터는 <b>글 없이 목소리로만</b> 답하고 입이 움직입니다. 다 들으면 <b>다시 듣기</b> 버튼이 생깁니다.', before:function(){ toChat(); voice.classList.add('on'); phone.classList.add('is-speaking'); vt.textContent = '말하는 중'; replay.hidden = false; } },
+    { sel:'#hist-btn', txt:'오른쪽 위 <b>기록 아이콘</b>을 누르면 DEEP CHAT에서 주고받은 말을 <b>글로 다시 읽고, 답마다 다시 들을 수</b> 있습니다.', before:function(){ toChat(); S.log = [{ me:'오늘 회의가 길어서 좀 지쳤어', time:'오후 9:10', reply:REPLIES[0] }, { me:'응 내일 발표도 있어', time:'오후 9:11', reply:REPLIES[1] }]; renderHist(); } },
+    { sel:'#snd', txt:'<b>기기 소리를 끄고</b> 보내면 안내가 뜨고, <b>DM에서 글로 보기</b>로 같은 답을 읽을 수 있습니다.', before:function(){ toChat(); } },
+    { sel:'.log', txt:'DM으로 돌아오면 DEEP CHAT 모드 대화는 <b>요약 한 줄</b>로만 남습니다. 이제 [DEEP CHAT]을 눌러 직접 보내 보세요.', before:function(){ toChat(); S.session = { t0:Date.now() - 120000, n:3, at:now() }; setMode('dm'); } }
+  ];
+  var ti = 0;
+  /* 2026-11-10 쏠림 수정: scrollIntoView 대신. 휴대전화 안 대상은 틀과 겹치는 부분만 본다 */
+  function visRect(t){
+    var r = t.getBoundingClientRect(); if (!phone.contains(t)) return r;
+    var p = phone.getBoundingClientRect(), top = Math.max(r.top, p.top), bottom = Math.min(r.bottom, p.bottom), left = Math.max(r.left, p.left), right = Math.min(r.right, p.right);
+    return { top: top, bottom: bottom, left: left, right: right, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+  }
+  function bring(t){
+    phone.scrollTop = 0; phone.scrollLeft = 0;
+    var v = visRect(t), seen = Math.max(0, Math.min(v.bottom, innerHeight) - Math.max(v.top, 0));
+    var ok = v.height < 240 ? (v.top >= 8 && v.bottom <= innerHeight - 8) : seen >= v.height * .6;
+    if (ok) return;                                                   /* 이미 보이면 화면을 움직이지 않음 */
+    var inPhone = phone.contains(t), box = inPhone ? phone.getBoundingClientRect() : v, y;
+    if (inPhone && box.height >= innerHeight - 24) y = scrollY + box.top;   /* 휴대전화가 화면을 꽉 채우는 MO: 휴대전화 맨 위에 맞춤 */
+    else y = scrollY + box.top - Math.max(8, (innerHeight - box.height) / 2);
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });       /* 이 문서 창만(포트폴리오 바깥 창은 안 움직임) */
+  }
+  function tplace(step){
+    if (step.before){ try { step.before(); } catch(e){} }
+    var t = document.querySelector(step.sel);
+    if (!t) return false;
+    bring(t);
+    function put(){
+      var r = visRect(t), pad = 6;
+      ring.style.top = (r.top - pad) + 'px'; ring.style.left = (r.left - pad) + 'px';
+      ring.style.width = (r.width + pad * 2) + 'px'; ring.style.height = (r.height + pad * 2) + 'px';
+      var pw = Math.min(360, innerWidth - 32), ph = pop.offsetHeight || 180;
+      var top = r.bottom + 14, left = r.left;
+      if (top + ph > innerHeight - 12) top = Math.max(12, r.top - ph - 14);
+      if (left + pw > innerWidth - 12) left = innerWidth - pw - 12;
+      pop.style.top = Math.max(12, top) + 'px'; pop.style.left = Math.max(12, left) + 'px';
+    }
+    setTimeout(put, 220); setTimeout(put, 620); setTimeout(put, 980);
+    return true;
+  }
+  function tshow(n){
+    ti = Math.max(0, Math.min(STEPS.length - 1, n));
+    var st = STEPS[ti];
+    tno.textContent = (ti + 1) + ' / ' + STEPS.length; ttxt.innerHTML = st.txt;
+    tprev.disabled = ti === 0; tnext.textContent = ti === STEPS.length - 1 ? '완료' : '다음';
+    tplace(st);
+  }
+  var SCROLLS = ['wheel', 'mousewheel', 'DOMMouseScroll', 'touchmove'];
+  function eat(e){ e.preventDefault(); e.stopPropagation(); }
+  function keyGuard(e){
+    if (e.key === 'Escape' || e.key === 'ArrowRight' || e.key === 'ArrowLeft') return;
+    if (pop.contains(e.target) && (e.key === 'Enter' || e.key === ' ')) return;
+    e.preventDefault(); e.stopPropagation();
+  }
+  function tlock(){
+    SCROLLS.forEach(function(t){ document.addEventListener(t, eat, { passive:false, capture:true }); });
+    window.addEventListener('wheel', eat, { passive:false, capture:true });
+    document.addEventListener('keydown', keyGuard, true); document.addEventListener('contextmenu', eat, true);
+    document.documentElement.classList.add('tut-lock');
+  }
+  function tunlock(){
+    SCROLLS.forEach(function(t){ document.removeEventListener(t, eat, true); });
+    window.removeEventListener('wheel', eat, true);
+    document.removeEventListener('keydown', keyGuard, true); document.removeEventListener('contextmenu', eat, true);
+    document.documentElement.classList.remove('tut-lock');
+  }
+  function topen(){ tut.hidden = false; tlock(); tshow(0); tnext.focus({ preventScroll:true }); }
+  function tclose(){
+    tut.hidden = true; tunlock(); phone.scrollTop = 0; window.scrollTo(0, 0);
+    stopVoice(); clearTimers(); S.mode = 'chat'; S.session = null; S.hintSeen = false; S.log = []; setMode('dm'); seed(); setSound(true); renderHist();   /* 처음 상태로 */
+    try { sessionStorage.setItem('tut:aoi-mode', '1'); } catch(e){}
+  }
+  $('tutOpen').addEventListener('click', topen);
+  tnext.addEventListener('click', function(){ ti === STEPS.length - 1 ? tclose() : tshow(ti + 1); });
+  tprev.addEventListener('click', function(){ tshow(ti - 1); });
+  tskip.addEventListener('click', tclose);
+  document.addEventListener('keydown', function(e){
+    if (tut.hidden) return;
+    if (e.key === 'Escape') tclose();
+    else if (e.key === 'ArrowRight') tnext.click();
+    else if (e.key === 'ArrowLeft' && ti > 0) tprev.click();
+  });
+  addEventListener('resize', function(){ if (!tut.hidden) tplace(STEPS[ti]); });
+  addEventListener('message', function(e){ if (e.data === 'tut:restart') topen(); });   /* 포트폴리오 팝업의 '설명 다시 보기' */
+  window.__tutOpen = topen;
+
+  /* 캡처용 고정 상태 */
+  var shot = new URLSearchParams(location.search).get('shot');
+  if (shot){
+    document.body.classList.add('shot'); clearTimers();
+    var chat = shot.indexOf('chat') === 0;
+    if (chat){ S.mode = 'dm'; setMode('chat'); }
+    if (shot === 'chat'){ hint.hidden = false; msg.value = ''; }
+    if (shot === 'chat-sent'){ hint.hidden = true; float.textContent = '오늘 회의가 길어서 좀 지쳤어'; float.className = 'float on'; think.classList.add('on'); }
+    if (shot === 'chat-speak'){ hint.hidden = true; voice.classList.add('on'); phone.classList.add('is-speaking'); vt.textContent = '말하는 중'; replay.hidden = false; }
+    if (shot === 'chat-mute'){ hint.hidden = true; mute.hidden = false; float.textContent = '오늘 회의가 길어서 좀 지쳤어'; float.className = 'float on'; }
+    if (shot === 'dm-back'){ addRow('log', 'DEEP CHAT 모드 대화 3번 · 2분 · 오후 9:12'); addRow('ch', '*고개를 끄덕인다* 아까 얘기 고마워. 내일도 들려줘.', '오후 9:13'); }
+    if (shot === 'chat-history'){ hint.hidden = true; S.log = [{ me:'퇴근하고 이제 막 들어왔어', time:'오후 9:10', reply:REPLIES[1] }, { me:'오늘 회의가 길어서 좀 지쳤어', time:'오후 9:11', reply:REPLIES[0] }, { me:'내일 발표도 있어', time:'오후 9:12', reply:REPLIES[2] }]; renderHist(); hist.hidden = false; }
+    if (shot === 'chat' || shot === 'chat-sent' || shot === 'chat-speak' || shot === 'chat-mute'){ S.log = []; renderHist(); }
+    if (shot === 'dm' || shot === 'dm-back'){ msg.value = ''; }
+    document.documentElement.setAttribute('data-ready', '1');
+  } else {
+    /* 탭 첫 진입에만 자동 실행(다른 시연과 같음) */
+    var seen = false; try { seen = sessionStorage.getItem('tut:aoi-mode') === '1'; } catch(e){}
+    if (!seen) setTimeout(topen, 420);
+  }
+})();
+</script>
+</body>
+</html>
